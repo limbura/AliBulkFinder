@@ -1,0 +1,3 @@
+mcp>=2.2,<3
+# Поставляется сторонним разработчиком. Код открытый, инструмент неофициальный.
+https://github.com/SZhukovWork/aliexpress-ru-mcp/archive/refs/heads/main.zip
