@@ -50,7 +50,7 @@ def read_settings() -> dict:
 class App:
     def __init__(self, root: tk.Tk):
         self.root = root
-        self.root.title("AliBulkFinder · поиск оптовых предложений AliExpress RU · v0.3.6")
+        self.root.title("AliBulkFinder · поиск оптовых предложений AliExpress RU · v0.3.7")
         self.root.geometry("1300x850")
         self.root.minsize(1000, 650)
         self.messages: queue.Queue = queue.Queue()
