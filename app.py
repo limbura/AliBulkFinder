@@ -14,25 +14,25 @@ import time
 import threading
 import tkinter as tk
 import webbrowser
-from datetime import datetime
 from pathlib import Path
-from tkinter import ttk, messagebox, filedialog, simpledialog
+from tkinter import ttk, messagebox, filedialog
 
-from engine import Offer, confirm_total, sorting_key, offer_from_product
+from engine import Offer, sorting_key, offer_from_product
 from optimizer import run_search
 from provider import LiveProvider
 from request_guard import RequestGuard, SearchCancelled
 from filters import TitleFilter, PriceRange
 from debuglog import LOG_PATH, record
+from timefmt import local_now
 
 BASE = Path(__file__).resolve().parent
 SETTINGS = BASE / "settings.json"
 DEFAULTS = {
     "queries": "рулетка ретрактор для бейджа\nретрактор для бейджа 100 шт\nbadge reel retractable holder\nбейдж катушка 50 шт",
-    "city": "Санкт-Петербург", "address": "", "target": "200", "overbuy": "0",
+    "city": "Санкт-Петербург", "target": "200", "overbuy": "0",
     "pages": "1", "max_products": "8", "api_budget": "18", "max_skus": "2",
-    "min_interval_sec": "4", "budget_pause_minutes": "10",
-    "throttle_pause_minutes": "10", "error_pause_minutes": "2",
+    "min_interval_sec": "3", "budget_pause_minutes": "0",
+    "throttle_pause_minutes": "15", "error_pause_minutes": "2",
     "required_terms": "рулетк, ретрактор, retractable, badge reel, катушк",
     "excluded_terms": "lanyard, шнурок, ремешок",
     "title_mode": "strict", "price_min": "", "price_max": "", "show_unpriced": "false",
@@ -50,12 +50,13 @@ def read_settings() -> dict:
 class App:
     def __init__(self, root: tk.Tk):
         self.root = root
-        self.root.title("AliBulkFinder · поиск оптовых предложений AliExpress RU · v0.3.3")
+        self.root.title("AliBulkFinder · поиск оптовых предложений AliExpress RU · v0.3.6")
         self.root.geometry("1300x850")
         self.root.minsize(1000, 650)
         self.messages: queue.Queue = queue.Queue()
         self.running = False
         self.stop_event = threading.Event()
+        self.skip_pause_event = threading.Event()
         self._close_requested = False
         self.operation = ""
         self.started_at = 0.0
@@ -63,13 +64,15 @@ class App:
         self.paused_total = 0.0
         self.pause_deadline = 0.0
         self.pause_reason = ""
+        self.pause_skippable = False
         self.calls_done = 0
         self.live_calls = 0
         self.calls_planned = 0
         self.action = "Готово к поиску"
         self.results: list[Offer] = []
+        self._last_redraw = 0.0
+        self._redraw_pending = False
         self.used_city = ""
-        self.used_address = ""
         self.current_target = 200
         self.current_overbuy = 0
         self.used_filter = TitleFilter(mode="off")
@@ -176,8 +179,12 @@ class App:
         style.configure("Treeview", rowheight=27)
         main = ttk.Frame(self.root, padding=9)
         main.pack(fill="both", expand=True)
-        ttk.Label(main, text="Оптимизатор оптовых закупок на AliExpress.ru", font=("Segoe UI", 15, "bold")).pack(anchor="w")
-        ttk.Label(main, text="Поиск → проверка SKU и доставки по городу → ручное подтверждение суммы корзины", foreground="#555").pack(anchor="w", pady=(0, 5))
+        header = ttk.Frame(main)
+        header.pack(fill="x", pady=(0, 5))
+        ttk.Label(header, text="Оптимизатор оптовых закупок AliExpress.ru",
+                  font=("Segoe UI", 15, "bold")).pack(side="left")
+        ttk.Label(header, text='МГ «Ночная Стража»',
+                  font=("Segoe UI", 11, "bold")).pack(side="right")
 
         settings = ttk.LabelFrame(main, text="Параметры поиска", padding=7)
         settings.pack(fill="x")
@@ -189,7 +196,7 @@ class App:
         query_area.grid(row=0, column=0, sticky="nsew", padx=(0, 14))
         ttk.Label(query_area, text="Поисковые запросы (один на строку)").pack(anchor="w", pady=(0, 3))
         self.queries = self._bind_clipboard_shortcuts(tk.Text(
-            query_area, height=4, width=44, wrap="word", font=("Segoe UI", 10), undo=True))
+            query_area, height=3, width=44, wrap="word", font=("Segoe UI", 10), undo=True))
         self.queries.pack(fill="both", expand=True)
         self.queries.insert("1.0", self.inputs["queries"])
 
@@ -208,18 +215,19 @@ class App:
             return e
 
         setting_entry(0, 0, "Город доставки", "city", 17)
-        setting_entry(0, 2, "Адрес / ПВЗ", "address", 20)
-        setting_entry(1, 0, "Нужно штук", "target", 8)
+        setting_entry(0, 2, "Нужно штук", "target", 8)
+        setting_entry(1, 0, "Страниц на запрос", "pages", 6)
         setting_entry(1, 2, "Макс. лишних штук", "overbuy", 8)
-        setting_entry(2, 0, "Страниц на запрос", "pages", 6)
-        setting_entry(2, 2, "Изучить карточек", "max_products", 7)
-        setting_entry(3, 0, "SKU на карточку", "max_skus", 6)
+        setting_entry(2, 0, "Изучить карточек", "max_products", 7)
+        setting_entry(2, 2, "SKU на карточку", "max_skus", 6)
 
-        ttk.Label(settings, text="Для расчёта через API используется город; полный адрес хранится локально для сверки в корзине.",
-                  foreground="#8a4c00").grid(row=1, column=0, columnspan=2, sticky="w", pady=(5, 0))
+        ttk.Label(settings, text="⚠ Если нужно >99 штук: MCP проверяет максимум 99 ЛОТОВ одного SKU за запрос. "
+                  "Для упаковок по 1 шт. расчёт доставки на весь заказ может быть недоступен.",
+                  foreground="#8a4c00", wraplength=1150).grid(row=1, column=0, columnspan=2,
+                                                            sticky="w", pady=(4, 0))
 
         filters = ttk.LabelFrame(main, text="Фильтры названия и ПОЛНОЙ стоимости закупки (все товары + доставка − скидки)", padding=7)
-        filters.pack(fill="x", pady=(5, 0))
+        filters.pack(fill="x", pady=(2, 0))
         filters.columnconfigure(1, weight=1)
         filters.columnconfigure(3, weight=1)
 
@@ -244,13 +252,15 @@ class App:
         self.show_unpriced_var = tk.BooleanVar(value=self.inputs.get("show_unpriced", "false").lower() in ("1", "true", "yes"))
         ttk.Checkbutton(filters, text="Показывать без известной итоговой цены", variable=self.show_unpriced_var,
                         command=self._redraw).grid(row=3, column=0, columnspan=2, sticky="w", pady=(3, 0))
-        ttk.Label(filters, text="Неизвестная доставка не считается нулевой; термины разделяются запятыми.",
-                  foreground="#8a4c00").grid(row=3, column=2, columnspan=2, sticky="w", pady=(3, 0))
+        ttk.Label(filters, text="Допустима часть слова: «принт» найдёт «принтер», «термопринтер». "
+                  "Слова/фразы разделяются запятыми; неизвестная доставка ≠ 0 ₽.",
+                  foreground="#8a4c00", wraplength=690).grid(row=3, column=2,
+                                                             columnspan=2, sticky="w", pady=(3, 0))
         for key in ("price_min", "price_max"):
             self.vars[key].trace_add("write", lambda *_: self._redraw())
 
         protection = ttk.LabelFrame(main, text="Защита от ограничений AliExpress — автоматические паузы", padding=6)
-        protection.pack(fill="x", pady=(5, 0))
+        protection.pack(fill="x", pady=(2, 0))
         protection_fields = ttk.Frame(protection)
         protection_fields.pack(fill="x")
         def protection_entry(caption, key, width):
@@ -260,34 +270,41 @@ class App:
             v = tk.StringVar(value=self.inputs[key])
             self.vars[key] = v
             self._bind_clipboard_shortcuts(ttk.Entry(box, textvariable=v, width=width)).pack(side="left")
-        protection_entry("Вызовов до паузы", "api_budget", 5)
         protection_entry("Интервал, сек.", "min_interval_sec", 5)
+        protection_entry("Вызовов до паузы", "api_budget", 5)
         protection_entry("Пауза по лимиту, мин.", "budget_pause_minutes", 5)
-        protection_entry("После HTTP 429, мин.", "throttle_pause_minutes", 5)
+        protection_entry("Лимит сайта, мин.", "throttle_pause_minutes", 5)
         protection_entry("После сбоя сети, мин.", "error_pause_minutes", 5)
-        ttk.Label(protection, text="Поиск возобновляется автоматически. При повторном 429 ждёт снова; остановка — кнопкой. "
-                  "Точное время завершения не гарантируется.", foreground="#8a4c00").pack(anchor="w", pady=(3, 0))
+        ttk.Label(protection, text="0 в «Вызовов до паузы» ИЛИ «Пауза по лимиту» отключает плановые паузы. "
+                  "Интервал и защита при ограничении сайтом остаются.",
+                  foreground="#8a4c00", wraplength=1200).pack(anchor="w", pady=(3, 0))
 
         buttons = ttk.Frame(main)
         buttons.pack(fill="x", pady=(6, 5))
         self.search_btn = ttk.Button(buttons, text="🔎  Найти и рассчитать", command=self.start_search)
         self.search_btn.pack(side="left", padx=(0, 6))
         self.stop_btn = ttk.Button(buttons, text="■  Остановить поиск", command=self.stop_search, state="disabled")
-        self.stop_btn.pack(side="left", padx=(0, 9))
+        self.stop_btn.pack(side="left", padx=(0, 6))
+        self.skip_btn = ttk.Button(buttons, text="Пропустить паузу", command=self.skip_pause, state="disabled")
+        self.skip_btn.pack(side="left", padx=(0, 9))
         ttk.Button(buttons, text="Открыть товар", command=self.open_selected).pack(side="left", padx=3)
-        ttk.Button(buttons, text="Штук/лот", command=self.change_pack).pack(side="left", padx=3)
         self.recheck_btn = ttk.Button(buttons, text="Проверить SKU", command=self.recheck_selected)
         self.recheck_btn.pack(side="left", padx=3)
-        ttk.Button(buttons, text="Подтвердить корзину", command=self.confirm_selected).pack(side="left", padx=3)
         ttk.Button(buttons, text="Экспорт CSV", command=self.export_csv).pack(side="right", padx=(6, 0))
         ttk.Button(buttons, text="JSON", command=self.export_json).pack(side="right", padx=3)
         ttk.Button(buttons, text="Очистить кэш", command=self.clear_cache).pack(side="right", padx=3)
 
-        frame = ttk.LabelFrame(main, text="Предложения (по степени проверки и полной стоимости)", padding=5)
+        self.panes = ttk.Panedwindow(main, orient="vertical")
+        self.panes.pack(fill="both", expand=True)
+        frame = ttk.LabelFrame(self.panes, text="Предложения (по степени проверки и полной стоимости)", padding=5)
         self.table_frame = frame
-        frame.pack(fill="both", expand=True)
+        self.panes.add(frame, weight=5)
+        frame.columnconfigure(0, weight=1)
+        frame.rowconfigure(0, weight=1)
+        table_area = ttk.Frame(frame)
+        table_area.grid(row=0, column=0, sticky="nsew")
         cols = ("status", "name", "pack", "lots", "pcs", "price", "goods", "delivery", "total", "per_piece")
-        self.tree = ttk.Treeview(frame, columns=cols, show="headings", selectmode="browse", height=5)
+        self.tree = ttk.Treeview(table_area, columns=cols, show="headings", selectmode="browse", height=5)
         titles = {"status": "Статус", "name": "Название товара / вариант", "pack": "Штук/лот",
                   "lots": "Лотов", "pcs": "Всего штук", "price": "₽/лот", "goods": "Товары, ₽",
                   "delivery": "Доставка, ₽", "total": "ИТОГО, ₽", "per_piece": "₽/штуку"}
@@ -296,7 +313,7 @@ class App:
         for col in cols:
             self.tree.heading(col, text=titles[col])
             self.tree.column(col, width=sizes[col], minwidth=65, stretch=col == "name", anchor="w" if col in ("name", "status") else "e")
-        scrollbar = ttk.Scrollbar(frame, orient="vertical", command=self.tree.yview)
+        scrollbar = ttk.Scrollbar(table_area, orient="vertical", command=self.tree.yview)
         self.tree.configure(yscrollcommand=scrollbar.set)
         scrollbar.pack(side="right", fill="y")
         self.tree.pack(side="left", fill="both", expand=True)
@@ -306,14 +323,18 @@ class App:
         self.tree.tag_configure("unknown", background="#fff4e2")
 
         self.details = tk.StringVar(value="Выбери предложение: здесь будут сведения о SKU, комплектности и причина неопределённости цены.")
-        ttk.Label(main, textvariable=self.details, wraplength=1250, justify="left").pack(fill="x", pady=(4, 3))
+        ttk.Label(frame, textvariable=self.details, wraplength=1250, justify="left").grid(
+            row=1, column=0, sticky="ew", pady=(4, 3))
         self.progress = tk.StringVar(value="Готово к поиску. Для первого запуска требуется выполнить setup_windows.bat")
-        ttk.Label(main, textvariable=self.progress).pack(anchor="w")
-        log_frame = ttk.Frame(main)
-        log_frame.pack(fill="x", pady=(3, 0))
+        ttk.Label(frame, textvariable=self.progress).grid(row=2, column=0, sticky="w")
+        log_frame = ttk.LabelFrame(self.panes, text="Журнал последних действий (перетаскивай разделитель выше или ниже)", padding=4)
+        self.panes.add(log_frame, weight=1)
         self.log = self._bind_clipboard_shortcuts(tk.Text(
             log_frame, height=3, bg="#f5f5f5", wrap="word", font=("Consolas", 9)))
-        self.log.pack(fill="x")
+        log_scrollbar = ttk.Scrollbar(log_frame, orient="vertical", command=self.log.yview)
+        self.log.configure(yscrollcommand=log_scrollbar.set)
+        log_scrollbar.pack(side="right", fill="y")
+        self.log.pack(side="left", fill="both", expand=True)
         self._write_log("Для реальных цен нужен интернет. Покупки и вход в аккаунт не выполняются.")
 
     def _price_range(self) -> PriceRange:
@@ -347,25 +368,27 @@ class App:
             raise ValueError("Нужны город и хотя бы один поисковый запрос")
         if not 1 <= d["target"] <= 100000 or not 0 <= d["overbuy"] <= 10000:
             raise ValueError("Проверь количество товара и допустимый избыток")
-        if not 1 <= d["pages"] <= 5 or not 1 <= d["max_products"] <= 100:
-            raise ValueError("Страниц: 1–5; карточек: 1–100")
-        if not 1 <= d["api_budget"] <= 1000 or not 1 <= d["max_skus"] <= 4:
-            raise ValueError("Вызовов до паузы: 1–1000; SKU на карточку: 1–4")
+        if not 1 <= d["pages"] <= 5 or not 1 <= d["max_products"] <= 5000:
+            raise ValueError("Страниц: 1–5; карточек: 1–5000. Большое число увеличивает время поиска.")
+        if not 0 <= d["api_budget"] <= 1000 or not 1 <= d["max_skus"] <= 4:
+            raise ValueError("Вызовов до паузы: 0–1000 (0 — без плановой паузы); SKU на карточку: 1–4")
         if not (math.isfinite(d["min_interval_sec"]) and 1 <= d["min_interval_sec"] <= 3600):
             raise ValueError("Интервал между запросами: 1–3600 секунд")
+        if not math.isfinite(d["budget_pause_minutes"]) or not 0 <= d["budget_pause_minutes"] <= 1440:
+            raise ValueError("Пауза по лимиту: 0–1440 минут (0 — отключена)")
         if any(not math.isfinite(d[key]) or not 0 < d[key] <= 1440
-               for key in ("budget_pause_minutes", "throttle_pause_minutes", "error_pause_minutes")):
-            raise ValueError("Паузы должны быть положительными и не более 1440 минут")
+               for key in ("throttle_pause_minutes", "error_pause_minutes")):
+            raise ValueError("Ожидание после ограничения сайтом и сбоя сети: больше 0 и не более 1440 минут")
         return d
 
     def clear_cache(self):
         if self.running:
             messagebox.showinfo("Кэш", "Подожди окончания текущей операции")
             return
-        if not messagebox.askyesno("Очистить кэш", "Удалить сохранённые результаты поиска и цены? Защитная пауза HTTP 429 при этом НЕ снимается."):
+        if not messagebox.askyesno("Очистить кэш", "Удалить сохранённые результаты поиска и цены? Защитная пауза при ограничении запросов сайтом при этом НЕ снимается."):
             return
         count = RequestGuard().clear()
-        self.progress.set(f"Удалено кэшированных ответов: {count}. Защитная пауза при HTTP 429 не сброшена.")
+        self.progress.set(f"Удалено кэшированных ответов: {count}. Защитная пауза при ограничении сайтом не сброшена.")
 
     def _save_settings(self):
         data = {k: var.get() for k, var in self.vars.items()}
@@ -383,6 +406,9 @@ class App:
         self.pause_started = None
         self.pause_deadline = 0.0
         self.pause_reason = ""
+        self.pause_skippable = False
+        self.skip_pause_event.clear()
+        self.skip_btn.configure(state="disabled")
         self.calls_done = 0
         self.live_calls = 0
         self.calls_planned = planned_calls
@@ -396,8 +422,17 @@ class App:
                     budget_pause_seconds=d["budget_pause_minutes"] * 60,
                     throttle_pause_seconds=d["throttle_pause_minutes"] * 60,
                     error_pause_seconds=d["error_pause_minutes"] * 60,
-                    stop_event=self.stop_event,
+                    stop_event=self.stop_event, skip_pause_event=self.skip_pause_event,
                     notify=lambda event, info: self.messages.put(("provider", (event, info))))
+
+    def skip_pause(self):
+        """Запрашивает пропуск только текущей плановой/ошибочной паузы."""
+        if not self.running or not self.pause_skippable or self.stop_event.is_set():
+            return
+        self.skip_pause_event.set()
+        self.skip_btn.configure(state="disabled")
+        self._write_log(f"Пользователь запросил пропуск паузы: {self.pause_reason}. "
+                        "При ограничении запросов блокировка на стороне AliExpress может сохраниться.")
 
     def stop_search(self):
         if not self.running or self.stop_event.is_set():
@@ -420,16 +455,17 @@ class App:
         queries = list(dict.fromkeys(x.strip() for x in d["queries"].splitlines() if x.strip()))
         self.results = []
         self.used_city = d["city"]
-        self.used_address = d["address"]
         self.current_target = d["target"]
         self.current_overbuy = d["overbuy"]
         self.used_filter = d["title_filter"]
         self._redraw()
         planned = len(queries) * d["pages"] + d["max_products"] * (1 + d["max_skus"])
         self._new_operation(planned_calls=planned)
+        plan_status = (f"серия {d['api_budget']} вызовов → ожидание {d['budget_pause_minutes']:g} мин"
+                       if d["api_budget"] > 0 and d["budget_pause_minutes"] > 0 else "плановые паузы выключены")
         self._write_log(f"Начинаю поиск, ориентировочно до {planned} операций с API/кэшем. "
-                        f"Серия {d['api_budget']} вызовов → пауза {d['budget_pause_minutes']:g} мин; "
-                        f"HTTP 429 → {d['throttle_pause_minutes']:g} мин. Остановка только кнопкой.")
+                        f"{plan_status}; при ограничении запросов сайтом → "
+                        f"{d['throttle_pause_minutes']:g} мин. Остановка кнопкой.")
 
         def work():
             provider = None
@@ -471,6 +507,8 @@ class App:
             self.pause_started = now
             self.pause_deadline = info["deadline"]
             self.pause_reason = info["reason"]
+            self.pause_skippable = bool(info.get("skippable", False))
+            self.skip_btn.configure(state="normal" if self.pause_skippable and not self.stop_event.is_set() else "disabled")
             # Часто логировать четырёхсекундные интервалы не нужно.
             if "Интервал" not in info["reason"]:
                 self._write_log(f"Пауза: {info['reason']}, на {info['seconds'] / 60:.1f} мин.")
@@ -480,6 +518,10 @@ class App:
             self.pause_started = None
             self.pause_deadline = 0.0
             self.pause_reason = ""
+            self.pause_skippable = False
+            self.skip_btn.configure(state="disabled")
+            if info.get("skipped"):
+                self._write_log("Текущая пауза пропущена пользователем. Продолжаю поиск.")
 
     @staticmethod
     def _format_duration(seconds: float) -> str:
@@ -500,7 +542,8 @@ class App:
         d = self.pending_search_params if hasattr(self, "pending_search_params") else self.params()
         budget = d["api_budget"]
         # Будущие плановые паузы — грубая оценка, учитывающая кэш не идеально.
-        future_pauses = max(0, (self.live_calls % budget + remaining - 1) // budget)
+        future_pauses = (max(0, (self.live_calls % budget + remaining - 1) // budget)
+                         if budget > 0 and d["budget_pause_minutes"] > 0 else 0)
         estimate = remaining * average + future_pauses * d["budget_pause_minutes"] * 60
         if self.pause_started is not None:
             left = max(0, self.pause_deadline - now)
@@ -529,9 +572,16 @@ class App:
                     self.calls_planned = self.calls_done + data
                 elif typ == "offer":
                     self.results.append(data)
-                    self._redraw()
+                    # Массовая выдача: максимум ~4 полных перерисовки/сек.
+                    if time.monotonic() - self._last_redraw >= 0.25:
+                        self._redraw()
+                        self._redraw_pending = False
+                    else:
+                        self._redraw_pending = True
                 elif typ == "done":
                     cancelled, live_calls, cache_hits = data
+                    self._redraw()
+                    self._redraw_pending = False
                     self._set_idle()
                     visible = self._visible_indices()
                     if cancelled:
@@ -562,6 +612,9 @@ class App:
         if self._close_requested and not self.running:
             self._final_close()
             return
+        if self._redraw_pending and time.monotonic() - self._last_redraw >= 0.25:
+            self._redraw()
+            self._redraw_pending = False
         self._update_eta()
         self._poll_after_id = self.root.after(130, self._poll)
 
@@ -571,9 +624,11 @@ class App:
         self.search_btn.configure(state="normal")
         self.recheck_btn.configure(state="normal")
         self.stop_btn.configure(state="disabled")
+        self.skip_btn.configure(state="disabled")
+        self.pause_skippable = False
 
     def _write_log(self, text: str):
-        self.log.insert("end", f"{datetime.now().strftime('%H:%M:%S')}  {text}\n")
+        self.log.insert("end", f"{local_now()}  {text}\n")
         self.log.see("end")
         lines = int(self.log.index("end-1c").split(".")[0])
         if lines > 250:
@@ -586,6 +641,7 @@ class App:
     def _redraw(self, select_index=None):
         if not hasattr(self, "tree"):
             return
+        self._last_redraw = time.monotonic()
         self.tree.delete(*self.tree.get_children())
         visible = self._visible_indices()
         try:
@@ -633,34 +689,6 @@ class App:
         if x and x[1].url.startswith("https://aliexpress.ru/"):
             webbrowser.open(x[1].url)
 
-    def change_pack(self):
-        x = self.chosen()
-        if not x:
-            return
-        i, o = x
-        n = simpledialog.askinteger("Комплектность", "Сколько ФИЗИЧЕСКИХ штук в одном лоте выбранного SKU?",
-                                    initialvalue=o.pack_size or 1, minvalue=1, maxvalue=10000, parent=self.root)
-        if n is None:
-            return
-        lots = math.ceil(self.current_target / n)
-        pcs = lots * n
-        if pcs > self.current_target + self.current_overbuy:
-            messagebox.showwarning("Избыток", f"Получается {pcs} шт., допустимо не более {self.current_target + self.current_overbuy}. Увеличь разрешённый избыток и начни новый поиск.")
-            return
-        o.pack_size = n
-        o.pack_basis = "вручную указано пользователем"
-        o.needed_lots = lots
-        o.actual_pieces = pcs
-        o.goods_total = round(o.unit_price * lots, 2) if o.unit_price is not None else None
-        o.delivery = None
-        o.total = None
-        o.per_piece = None
-        o.confirmed_total = None
-        o.confirmed_at = ""
-        o.status = "НУЖНА ПРОВЕРКА"
-        o.note = "Комплектность исправлена вручную; необходимо повторно проверить цену/доставку для нового числа лотов"
-        self._redraw(i)
-
     def recheck_selected(self):
         if self.running:
             return
@@ -707,28 +735,6 @@ class App:
                     self.messages.put(("fail", f"{type(exc).__name__}: {exc}"))
         threading.Thread(target=work, daemon=True).start()
 
-    def confirm_selected(self):
-        x = self.chosen()
-        if not x:
-            return
-        i, o = x
-        if self.vars["city"].get().strip() != self.used_city or self.vars["address"].get().strip() != self.used_address:
-            messagebox.showwarning("Изменён адрес", "Адрес или город изменён после поиска. Начни поиск заново, чтобы не подтвердить сумму по старому адресу.")
-            return
-        if not o.actual_pieces:
-            messagebox.showwarning("Комплектность", "Сначала уточни число штук в лоте")
-            return
-        text = (f"Подтверждай только после проверки корзины для: {o.needed_lots} лотов × {o.pack_size} шт.\n"
-                f"Город: {self.used_city}; адрес/ПВЗ: {self.used_address or '(не задан)'}\n\n"
-                "Введи полную сумму из корзины AliExpress (товары + доставка − скидки), ₽:")
-        total = simpledialog.askfloat("Подтвердить реальную стоимость", text,
-                                      initialvalue=o.total, minvalue=0, parent=self.root)
-        if total is None:
-            return
-        confirm_total(o, total)
-        o.note += " | Итог вручную подтверждён пользователем по корзине"
-        self._redraw(i)
-
     def export_csv(self):
         if not self.results:
             messagebox.showinfo("Экспорт", "Сначала получи результаты поиска")
@@ -738,11 +744,10 @@ class App:
         if not path:
             return
         keys = ["status", "name", "title_quality", "title_reason", "options", "pack_size", "pack_basis", "needed_lots", "actual_pieces",
-                "unit_price", "goods_total", "delivery", "total", "per_piece", "confirmed_total",
-                "confirmed_at", "note", "url", "item_id", "sku_id", "fetched_at"]
+                "unit_price", "goods_total", "delivery", "total", "per_piece", "note", "url", "item_id", "sku_id", "fetched_at"]
         with open(path, "w", encoding="utf-8-sig", newline="") as f:
             out = csv.writer(f, delimiter=";")
-            out.writerow(["Город расчёта", self.used_city, "Адрес/ПВЗ", self.used_address])
+            out.writerow(["Город расчёта", self.used_city])
             out.writerow(["Целевое количество", self.current_target, "Допустимый избыток", self.current_overbuy])
             out.writerow(["Фильтр полной цены, ₽", self.vars["price_min"].get(), "до", self.vars["price_max"].get()])
             out.writerow(["Без известной суммы", "показывать" if self.show_unpriced_var.get() else "не показывать"])
@@ -761,7 +766,7 @@ class App:
                                             filetypes=[("JSON", "*.json")])
         if not path:
             return
-        record = {"search_city": self.used_city, "delivery_address": self.used_address,
+        record = {"search_city": self.used_city,
                   "target_pieces": self.current_target, "max_extra_pieces": self.current_overbuy,
                   "filters": {"required_terms": self.vars["required_terms"].get(),
                               "excluded_terms": self.vars["excluded_terms"].get(),

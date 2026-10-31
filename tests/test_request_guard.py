@@ -64,8 +64,8 @@ class GuardTests(unittest.TestCase):
             self.assertEqual(asyncio.run(p.search("reel"))["items"], [])
             self.assertEqual(session.calls, 2)
             self.assertEqual(p.uncached_calls, 2)
-            self.assertTrue(any(e == "log" and "HTTP 429" in info["text"] for e, info in notices))
-            self.assertTrue(any(e == "pause" and "429" in info["reason"] for e, info in notices))
+            self.assertTrue(any(e == "log" and "ограничил запросы" in info["text"] for e, info in notices))
+            self.assertTrue(any(e == "pause" and "ограничения запросов сайтом" in info["reason"] for e, info in notices))
 
     def test_budget_pauses_then_continues(self):
         with tempfile.TemporaryDirectory() as temp:
@@ -82,6 +82,77 @@ class GuardTests(unittest.TestCase):
             self.assertEqual(session.calls, 2)
             self.assertEqual(p.uncached_calls, 2)
             self.assertTrue(any(e == "log" and "лимит" in info["text"] for e, info in notices))
+
+    def test_429_is_not_replayed_from_cache_and_has_fresh_mcp_attempt(self):
+        with tempfile.TemporaryDirectory() as temp:
+            guard = RequestGuard(Path(temp))
+            s = StubSession([bad("RGV587 / HTTP 429"), bad("RGV587 / HTTP 429"),
+                             good({"items": [], "has_more": False})])
+            provider = LiveProvider("СПб", guard=guard, throttle_pause_seconds=0.01,
+                                    min_interval=1)
+            provider.session = s
+            result = asyncio.run(provider.search("badge reel"))
+            self.assertEqual(result["items"], [])
+            self.assertEqual(s.calls, 3)  # каждый 429 пришёл из отдельного вызова MCP
+            self.assertEqual(provider.uncached_calls, 3)
+            self.assertEqual(guard.blocked_until() > guard.now(), False)
+            self.assertEqual(len([p for p in Path(temp).glob("*.json") if len(p.stem) == 64]), 1)
+
+    def test_skip_429_clears_only_local_cooldown(self):
+        async def run():
+            with tempfile.TemporaryDirectory() as temp:
+                guard = RequestGuard(Path(temp))
+                guard.mark_blocked("429", cooldown_seconds=3600)
+                skip_event = threading.Event()
+                session = StubSession([good({"items": [], "has_more": False})])
+                notices = []
+                def notify(event, data):
+                    notices.append((event, data))
+                    if event == "pause" and "ограничения запросов сайтом" in data["reason"]:
+                        asyncio.get_running_loop().call_later(0.05, skip_event.set)
+                p = LiveProvider("СПб", guard=guard, skip_pause_event=skip_event, notify=notify)
+                p.session = session
+                await asyncio.wait_for(p.search("reel"), timeout=1.5)
+                self.assertEqual(session.calls, 1)
+                self.assertEqual(guard.blocked_until(), 0)
+                self.assertTrue(any(evt == "resume" and data.get("skipped") for evt, data in notices))
+        asyncio.run(run())
+
+    def test_skip_plan_pause_does_not_skip_next_interval(self):
+        async def run():
+            with tempfile.TemporaryDirectory() as temp:
+                skip_event = threading.Event()
+                events = []
+                session = StubSession([good({"items": [], "has_more": False}),
+                                       good({"items": [], "has_more": False})])
+                def notify(event, data):
+                    events.append((event, data))
+                    if event == "pause" and "лимиту" in data["reason"]:
+                        asyncio.get_running_loop().call_later(0.05, skip_event.set)
+                p = LiveProvider("СПб", guard=RequestGuard(Path(temp)), budget=1,
+                                 budget_pause_seconds=3600, min_interval=1,
+                                 skip_pause_event=skip_event, notify=notify)
+                p.session = session
+                start = asyncio.get_running_loop().time()
+                await p.search("one")
+                await asyncio.wait_for(p.search("two"), timeout=3)
+                elapsed = asyncio.get_running_loop().time() - start
+                self.assertGreater(elapsed, 0.9)  # обязательный секундный интервал не пропущен
+                self.assertLess(elapsed, 2.5)  # долгую плановую паузу пропустили
+                self.assertEqual(session.calls, 2)
+                self.assertTrue(any(evt == "pause" and not data.get("skippable")
+                                    for evt, data in events))
+        asyncio.run(run())
+
+    def test_skip_network_error_pause(self):
+        async def run():
+            skip_event = threading.Event()
+            p = LiveProvider("СПб", error_pause_seconds=600, skip_pause_event=skip_event)
+            task = asyncio.create_task(p.wait_for_error())
+            await asyncio.sleep(0.05)
+            skip_event.set()
+            await asyncio.wait_for(task, timeout=1.5)
+        asyncio.run(run())
 
     def test_stop_during_long_cooldown_immediately(self):
         async def run():

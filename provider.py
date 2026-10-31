@@ -12,17 +12,18 @@ import time
 from typing import Any, Callable
 
 from debuglog import record
+from timefmt import local_now
 from request_guard import RequestGuard, SearchCancelled, is_throttle_message
 
 
 class LiveProvider:
-    def __init__(self, city: str, *, budget: int = 18, min_interval: float = 4.0,
-                 budget_pause_seconds: float = 600.0, throttle_pause_seconds: float = 600.0,
-                 guard: RequestGuard | None = None, stop_event: threading.Event | None = None,
+    def __init__(self, city: str, *, budget: int = 18, min_interval: float = 3.0,
+                 budget_pause_seconds: float = 0.0, throttle_pause_seconds: float = 900.0,
+                 guard: RequestGuard | None = None, stop_event: threading.Event | None = None, skip_pause_event: threading.Event | None = None,
                  notify: Callable[[str, dict], None] | None = None,
                  error_pause_seconds: float = 120.0):
-        if budget < 1 or min_interval < 1 or budget_pause_seconds <= 0 or throttle_pause_seconds <= 0:
-            raise ValueError("Лимит >= 1; интервал >= 1 сек.; длительности пауз > 0")
+        if budget < 0 or min_interval < 1 or budget_pause_seconds < 0 or throttle_pause_seconds <= 0 or error_pause_seconds <= 0:
+            raise ValueError("Число вызовов и плановая пауза >= 0; интервал >= 1 сек.; ожидание после ограничения/ошибки > 0")
         self.city = city
         self.budget = budget
         self.min_interval = min_interval
@@ -31,6 +32,7 @@ class LiveProvider:
         self.error_pause_seconds = error_pause_seconds
         self.guard = guard or RequestGuard()
         self.stop_event = stop_event or threading.Event()
+        self.skip_pause_event = skip_pause_event or threading.Event()
         self.notify = notify or (lambda event, data: None)
         self.stack = None
         self.session = None
@@ -48,26 +50,44 @@ class LiveProvider:
             self.stop_reason = "Остановлено пользователем"
             raise SearchCancelled(self.stop_reason)
 
-    async def _wait(self, seconds: float, reason: str, *, deadline: float | None = None):
-        """Ожидание с возможностью отмены за ~0.5 сек. Обновление GUI отдельно от цикла."""
+    async def _wait(self, seconds: float, reason: str, *, skippable: bool = False) -> bool:
+        """Отменяемое ожидание. Возвращает True только при ручном пропуске.
+
+        Пропуск относится к одной текущей паузе. Для интервала между
+        запросами он недоступен; новые паузы не пропускаются автоматически.
+        """
         self._check_stop()
         until_mono = time.monotonic() + max(0.0, seconds)
-        self._notify("pause", seconds=seconds, reason=reason, deadline=until_mono)
+        if skippable:
+            self.skip_pause_event.clear()
+        self._notify("pause", seconds=seconds, reason=reason, deadline=until_mono,
+                     skippable=skippable)
+        skipped = False
         try:
             while True:
                 self._check_stop()
+                if skippable and self.skip_pause_event.is_set():
+                    skipped = True
+                    break
                 left = until_mono - time.monotonic()
                 if left <= 0:
                     break
-                await asyncio.sleep(min(0.5, left))
+                await asyncio.sleep(min(0.2, left))
         finally:
-            self._notify("resume", reason=reason)
+            if skippable:
+                self.skip_pause_event.clear()
+            self._notify("resume", reason=reason, skipped=skipped)
+        return skipped
 
     async def _honor_cooldown(self):
         until = self.guard.blocked_until()
         seconds = max(0.0, until - self.guard.now())
         if seconds > 0:
-            await self._wait(seconds, "Защитная пауза после HTTP 429")
+            skipped = await self._wait(seconds, "Ожидание после ограничения запросов сайтом", skippable=True)
+            if skipped:
+                self.guard.clear_blocked()
+                self._notify("log", text="Пользователь пропустил ожидание после ограничения сайтом; "
+                                         "следующий запрос всё равно соблюдает минимальный интервал.")
 
     async def _respect_interval(self):
         remaining = self.last_request_started + self.min_interval - time.monotonic()
@@ -160,10 +180,10 @@ class LiveProvider:
         while True:  # 429 и лимит — паузы, НЕ завершение поиска.
             self._check_stop()
             await self._honor_cooldown()
-            if self.calls_in_batch >= self.budget:
+            if self.budget > 0 and self.budget_pause_seconds > 0 and self.calls_in_batch >= self.budget:
                 self._notify("log", text=f"Достигнут лимит {self.budget} запросов. "
                                           f"Пауза на {self.budget_pause_seconds / 60:g} мин; затем продолжаю поиск.")
-                await self._wait(self.budget_pause_seconds, "Плановая пауза по лимиту запросов")
+                await self._wait(self.budget_pause_seconds, "Плановая пауза по лимиту запросов", skippable=True)
                 self.calls_in_batch = 0
             await self._respect_interval()
             await self._connect()
@@ -171,10 +191,15 @@ class LiveProvider:
             self.calls_in_batch += 1
             self.uncached_calls += 1
             self.last_request_started = time.monotonic()
+            stamp = local_now()
             self._notify("request", count=self.uncached_calls, batch=self.calls_in_batch)
+            record(f"MCP ПОПЫТКА {self.uncached_calls} [{stamp}] {name}: "
+                   f"аргументы={json.dumps(args, ensure_ascii=False, sort_keys=True)}")
             try:
                 result = await self._call_tool_cancellable(name, args)
                 data = self._extract_payload(result, name)
+                record(f"MCP ОТВЕТ {self.uncached_calls} {name}: успешный JSON; "
+                       f"isError={getattr(result, 'isError', False)}")
             except SearchCancelled:
                 raise
             except Exception as exc:
@@ -183,9 +208,13 @@ class LiveProvider:
                     self.calls_in_batch = 0  # после 429 начинаем новую серию после паузы
                     until = self.guard.mark_blocked(detail, cooldown_seconds=self.throttle_pause_seconds)
                     left = max(0, until - self.guard.now())
-                    msg = (f"AliExpress вернул HTTP 429 / RGV587. Ожидаю {left / 60:.1f} мин "
-                           f"(не ранее {time.strftime('%H:%M:%S', time.localtime(until))}), затем повторю запрос.")
-                    record(msg + " " + detail[:350])
+                    msg = (f"AliExpress ограничил запросы (попытка №{self.uncached_calls}, {name}). "
+                           f"Ожидаю {left / 60:.1f} мин "
+                           f"(до {time.strftime('%d.%m.%Y %H:%M:%S', time.localtime(until))}), "
+                           "затем повторю запрос.")
+                    record(f"MCP ОТВЕТ {self.uncached_calls} {name}: ограничение запросов сайтом (технический код 429). "
+                           f"Источник: ответ MCP; свежий HTTP-ответ aliexpress.ru этим не подтверждён. "
+                           f"Содержимое: {detail[:800]}")
                     self._notify("log", text=msg)
                     continue
                 record(f"Ошибка вызова MCP {name}: {detail[:500]}", exc)
@@ -195,7 +224,7 @@ class LiveProvider:
             return data
 
     async def wait_for_error(self):
-        await self._wait(self.error_pause_seconds, "Повтор после ошибки сервера / сети")
+        await self._wait(self.error_pause_seconds, "Повтор после ошибки сервера / сети", skippable=True)
 
     async def search(self, query: str, page: int = 1) -> dict:
         return await self._call("search_products", {"query": query, "page": page, "sort": "relevance", "city": self.city, "limit": 20})

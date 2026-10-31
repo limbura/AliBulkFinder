@@ -79,16 +79,26 @@ class RequestGuard:
     def check(self):
         until = self.blocked_until()
         if until > self.now():
-            stamp = datetime.fromtimestamp(until).strftime("%d.%m.%Y %H:%M")
-            raise AliExpressRateLimited(f"Защитная пауза после HTTP 429 до {stamp}")
+            stamp = datetime.fromtimestamp(until).strftime("%d.%m.%Y %H:%M:%S")
+            raise AliExpressRateLimited(f"Ожидание после ограничения запросов сайтом до {stamp}")
 
     def mark_blocked(self, detail: str = "", *, cooldown_seconds: float = 600) -> float:
         """Сохраняет время ожидания для повторного запуска программы; возвращает timestamp."""
         if cooldown_seconds <= 0:
-            raise ValueError("Пауза после HTTP 429 должна быть положительной")
+            raise ValueError("Ожидание после ограничения запросов сайтом должно быть положительным")
         until = max(self.blocked_until(), self.now() + cooldown_seconds)
         self.cache_dir.mkdir(parents=True, exist_ok=True)
         (self.cache_dir / "blocked_until.json").write_text(
             json.dumps({"until": until, "reason": detail[:250]}, ensure_ascii=False), encoding="utf-8"
         )
         return until
+
+    def clear_blocked(self):
+        """Удаляет только локальный защитный таймер после явного выбора пользователя.
+
+        Не сбрасывает лимит на стороне AliExpress и не отменяет интервал запросов.
+        """
+        try:
+            (self.cache_dir / "blocked_until.json").unlink()
+        except FileNotFoundError:
+            pass

@@ -38,6 +38,16 @@ class TestEngine(unittest.TestCase):
         self.assertEqual(row.status, "ПРОВЕРЕНО В КОРЗИНЕ")
         self.assertEqual(row.per_piece, 7.85)
 
+    def test_server_timestamp_becomes_readable_local_timestamp(self):
+        from timefmt import local_datetime
+        product = {"item_id": 1, "name": "badge reels", "source_id": 0,
+                   "fetched_at": "2026-10-31T21:12:21+00:00"}
+        selected = {"variant": {"sku_id": "V", "price_rub": 10}, "price": 10,
+                    "pack": 100, "basis": "вариант SKU", "lots": 2, "pieces": 200}
+        row = offer_from_product(product, selected, 200, None)
+        self.assertEqual(row.fetched_at, local_datetime(product["fetched_at"]))
+        self.assertRegex(row.fetched_at, r"^\d\d\.\d\d\.\d{4} \d\d:\d\d:\d\d$")
+
     def test_delivery_unknown_is_not_zero(self):
         p = {"item_id": 1, "source_id": 0, "name": "a", "url": "https://aliexpress.ru/item/1.html"}
         sel = {"variant": {"sku_id": "x", "price_rub": 100}, "price": 100, "pack": 20,

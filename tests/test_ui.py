@@ -1,6 +1,7 @@
 """Тесты интерфейса; при отсутствии графического дисплея корректно пропускаются."""
 import sys
 import tkinter as tk
+from tkinter import ttk
 from pathlib import Path
 from types import SimpleNamespace
 import unittest
@@ -85,13 +86,86 @@ class TestGUI(unittest.TestCase):
         import time
         self.app.pending_search_params = self.app.params()
         self.app._new_operation(planned_calls=12)
-        self.app._on_provider_event("pause", {"reason": "Защитная пауза после HTTP 429",
+        self.app._on_provider_event("pause", {"reason": "Ожидание после ограничения запросов сайтом",
                                               "deadline": time.monotonic() + 10, "seconds": 10})
         self.app._update_eta()
-        self.assertIn("HTTP 429", self.app.progress.get())
+        self.assertIn("ограничения запросов сайтом", self.app.progress.get())
         self.assertIn("осталось", self.app.progress.get())
         self.app._on_provider_event("resume", {})
         self.app._set_idle()
+
+    def test_requested_ui_and_large_card_limit(self):
+        self.app.vars["max_products"].set("250")
+        self.assertEqual(self.app.params()["max_products"], 250)
+        self.app.vars["max_products"].set("5000")
+        self.assertEqual(self.app.params()["max_products"], 5000)
+        self.assertNotIn("address", self.app.vars)
+        self.assertIsInstance(self.app.panes, ttk.Panedwindow)
+        texts = [str(w.cget("text")) for w in self._walk(self.root)
+                 if isinstance(w, (ttk.Label, ttk.Button))]
+        self.assertTrue(any('МГ «Ночная Стража»' == text for text in texts))
+        self.assertFalse(any('Подтвердить корзину' == text or 'Штук/лот' == text for text in texts))
+        self.assertFalse(any('Поиск → проверка SKU' in text for text in texts))
+        self.assertGreaterEqual(sum(isinstance(w, ttk.Scrollbar)
+                                    for w in self._walk(self.root)), 2)
+        self.assertTrue(self.app.log.cget("yscrollcommand"))
+
+    def test_skip_button_only_enabled_for_skippable_pause(self):
+        import time
+        self.app.pending_search_params = self.app.params()
+        self.app._new_operation(planned_calls=10)
+        self.app._on_provider_event("pause", {"reason": "Интервал между запросами",
+             "deadline": time.monotonic() + 10, "seconds": 10, "skippable": False})
+        self.assertTrue(self.app.skip_btn.instate(["disabled"]))
+        self.app.skip_pause()
+        self.assertFalse(self.app.skip_pause_event.is_set())
+        self.app._on_provider_event("resume", {})
+        self.app._on_provider_event("pause", {"reason": "Ожидание после ограничения запросов сайтом",
+             "deadline": time.monotonic() + 600, "seconds": 600, "skippable": True})
+        self.assertTrue(self.app.skip_btn.instate(["!disabled"]))
+        self.app.skip_pause()
+        self.assertTrue(self.app.skip_pause_event.is_set())
+        self.assertTrue(self.app.skip_btn.instate(["disabled"]))
+        self.app._on_provider_event("resume", {"skipped": True})
+        self.assertTrue(self.app.skip_btn.instate(["disabled"]))
+        self.app._set_idle()
+
+    def test_zero_disables_planned_pause_in_ui_and_eta(self):
+        for field, value in (("api_budget", "0"), ("budget_pause_minutes", "0")):
+            previous = self.app.vars[field].get()
+            self.app.vars[field].set(value)
+            try:
+                data = self.app.params()
+                self.assertEqual(data[field], 0)
+                self.app.pending_search_params = data
+                self.app._new_operation(planned_calls=12)
+                self.app._update_eta()  # без деления на ноль
+                self.assertIn("осталось", self.app.progress.get())
+                self.app._set_idle()
+            finally:
+                self.app.vars[field].set(previous)
+
+    def test_protection_fields_order_and_term(self):
+        labels = [w.cget("text") for w in self._walk(self.root) if isinstance(w, ttk.Label)]
+        self.assertLess(labels.index("Интервал, сек."), labels.index("Вызовов до паузы"))
+        self.assertLess(labels.index("Вызовов до паузы"), labels.index("Пауза по лимиту, мин."))
+        self.assertIn("Лимит сайта, мин.", labels)
+        self.assertFalse(any("После HTTP 429" in t for t in labels))
+        self.assertTrue(any("отключает плановые паузы" in t for t in labels))
+
+    def test_log_pane_resizes_with_sash(self):
+        self.root.geometry("1300x1000+0+0")
+        self.root.update()
+        before = self.app.log.winfo_height()
+        old = self.app.panes.sashpos(0)
+        self.app.panes.sashpos(0, max(100, old - 50))
+        self.root.update()
+        self.assertGreater(self.app.log.winfo_height(), before)
+
+    def _walk(self, widget):
+        yield widget
+        for child in widget.winfo_children():
+            yield from self._walk(child)
 
     def _find_entry_by_variable(self, variable):
         def walk(widget):

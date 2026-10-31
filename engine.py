@@ -4,7 +4,7 @@ from __future__ import annotations
 import math
 import re
 from dataclasses import dataclass, asdict
-from datetime import datetime, timezone
+from timefmt import local_now, local_datetime
 from typing import Any
 
 # Только явные обозначения количества, чтобы не принять «20 мм» за 20 штук.
@@ -184,7 +184,7 @@ def offer_from_product(product: dict, selected: dict, target: int, quote: dict |
                  pack_size=pack, pack_basis=selected["basis"], needed_lots=lots, actual_pieces=pieces,
                  unit_price=price, goods_total=goods, delivery=shipping, total=total,
                  per_piece=per_piece, status=status, note=" | ".join(notes),
-                 fetched_at=str((quote or product).get("fetched_at") or ""))
+                 fetched_at=local_datetime((quote or product).get("fetched_at")))
 
 
 def confirm_total(o: Offer, total: float) -> Offer:
@@ -193,7 +193,7 @@ def confirm_total(o: Offer, total: float) -> Offer:
     if not o.actual_pieces:
         raise ValueError("Сначала укажи количество штук в упаковке")
     o.confirmed_total = round(total, 2)
-    o.confirmed_at = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    o.confirmed_at = local_now()
     o.status = "ПРОВЕРЕНО В КОРЗИНЕ"
     o.total = o.confirmed_total
     o.per_piece = round(o.total / o.actual_pieces, 4)
