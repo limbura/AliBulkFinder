@@ -29,7 +29,7 @@ BASE = Path(__file__).resolve().parent
 SETTINGS = BASE / "settings.json"
 DEFAULTS = {
     "queries": "рулетка ретрактор для бейджа\nретрактор для бейджа 100 шт\nbadge reel retractable holder\nбейдж катушка 50 шт",
-    "city": "Санкт-Петербург", "target": "200", "overbuy": "0",
+    "city": "Санкт-Петербург", "target": "99", "overbuy": "0",
     "pages": "1", "max_products": "8", "api_budget": "18", "max_skus": "2",
     "min_interval_sec": "3", "budget_pause_minutes": "0",
     "throttle_pause_minutes": "15", "error_pause_minutes": "2",

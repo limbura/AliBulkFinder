@@ -1,36 +1,21 @@
-# VS Code
-
-.vscode/
-
-# Arduino build files
-
-build/
-out/
-
-# Compiled binaries
-
-*.bin
-*.elf
-*.hex
-*.map
-
-# OS garbage
-
-.DS_Store
-Thumbs.db
-desktop.ini
-
-# Архивы
-*.zip
-
-# Виртуальные окружения Python
+# Python
 .venv/
-
-# Кэш Python
 __pycache__/
 *.py[cod]
 
-# Локальные журналы и блокировки пакетной записи
-batch_cards*.json
-batch_cards*.json.tmp
-batch_cards*.json.lock
+# IDE
+.vscode/
+.idea/
+
+# Локальные настройки
+settings.json
+
+# Кэш AliExpress
+cache/
+
+# Диагностические журналы
+alibulkfinder_*.log*
+*.log
+
+# Временные файлы
+*.tmp
