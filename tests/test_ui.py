@@ -68,6 +68,18 @@ class TestGUI(unittest.TestCase):
         self.assertLessEqual(w.winfo_width(), self.root.winfo_width() * 0.52)
         self.assertGreater(self.app.tree.winfo_height(), 150)
 
+    def test_header_progress_and_eta(self):
+        self.assertIsInstance(self.app.header_progress_bar, ttk.Progressbar)
+        self.assertEqual(self.app.header_progress_value.get(), 0)
+        self.app.pending_search_params = self.app.params()
+        self.app._new_operation(planned_calls=10)
+        self.app.calls_done = 3
+        self.app._update_eta()
+        self.assertEqual(self.app.header_progress_value.get(), 30)
+        self.assertIn("30%", self.app.header_progress_text.get())
+        self.assertIn("Осталось:", self.app.header_eta.get())
+        self.app._set_idle()
+
     def test_protection_settings_and_stop(self):
         names = ("api_budget", "min_interval_sec", "budget_pause_minutes",
                  "throttle_pause_minutes", "error_pause_minutes")

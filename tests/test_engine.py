@@ -3,7 +3,7 @@ import asyncio
 import sys
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from engine import pack_size_for_variant, get_variants, offer_from_product, sorting_key, confirm_total
+from engine import pack_size_for_variant, get_variants, offer_from_product, sorting_key, confirm_total, product_url_for_sku
 from optimizer import run_search
 
 
@@ -15,6 +15,21 @@ class TestEngine(unittest.TestCase):
         self.assertEqual(pack_size_for_variant({"options": {}}, None, "100pcs hooks")[0], None)
         self.assertEqual(pack_size_for_variant({"options": {}}, None, "badge reel")[0], 1)
         self.assertEqual(pack_size_for_variant({"options": {"Size": "40 mm"}}, None, "foo")[0], 1)
+
+    def test_links_open_selected_numeric_sku(self):
+        base = "https://aliexpress.ru/item/1005007679081292.html"
+        expected = base + "?sku_id=12000041782264143"
+        self.assertEqual(product_url_for_sku(base, "12000041782264143"), expected)
+        self.assertEqual(
+            product_url_for_sku(base + "?spm=test&sku_id=11#details", "12000041782264143"),
+            base + "?spm=test&sku_id=12000041782264143#details")
+        self.assertEqual(product_url_for_sku(base, ""), base)
+        self.assertEqual(product_url_for_sku(base, "unknown"), base)
+        self.assertEqual(product_url_for_sku("https://example.com/item/11.html", "123"), "https://example.com/item/11.html")
+        product = {"item_id": 1005007679081292, "name": "badge reel", "url": base}
+        selected = {"variant": {"sku_id": "12000041782264143", "price_rub": 12},
+                    "price": 12, "pack": 1, "basis": "вариант SKU", "lots": 2, "pieces": 2}
+        self.assertEqual(offer_from_product(product, selected, 2, None).url, expected)
 
     def test_selection_and_totals(self):
         p = {"item_id": 123, "source_id": 0, "name": "reels", "url": "https://aliexpress.ru/item/123.html",

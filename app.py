@@ -50,7 +50,7 @@ def read_settings() -> dict:
 class App:
     def __init__(self, root: tk.Tk):
         self.root = root
-        self.root.title("AliBulkFinder · поиск оптовых предложений AliExpress RU · v0.3.7")
+        self.root.title("AliBulkFinder · поиск оптовых предложений AliExpress RU · v0.3.8")
         self.root.geometry("1300x850")
         self.root.minsize(1000, 650)
         self.messages: queue.Queue = queue.Queue()
@@ -181,10 +181,30 @@ class App:
         main.pack(fill="both", expand=True)
         header = ttk.Frame(main)
         header.pack(fill="x", pady=(0, 5))
+        # Заголовок, крупный прогресс и команда — в одной строке.
+        header.columnconfigure(0, weight=1)
+        header.columnconfigure(2, weight=1)
         ttk.Label(header, text="Оптимизатор оптовых закупок AliExpress.ru",
-                  font=("Segoe UI", 15, "bold")).pack(side="left")
+                  font=("Segoe UI", 15, "bold")).grid(row=0, column=0, sticky="w")
+        center = ttk.Frame(header)
+        center.grid(row=0, column=1, sticky="n", padx=12)
+        self.header_progress_value = tk.DoubleVar(value=0)
+        self.header_progress_text = tk.StringVar(value="0%")
+        self.header_eta = tk.StringVar(value="Осталось: —")
+        bar_row = ttk.Frame(center)
+        bar_row.pack(anchor="center")
+        style.configure("Header.Horizontal.TProgressbar", thickness=18)
+        self.header_progress_bar = ttk.Progressbar(
+            bar_row, style="Header.Horizontal.TProgressbar", orient="horizontal",
+            mode="determinate", maximum=100, length=240,
+            variable=self.header_progress_value)
+        self.header_progress_bar.pack(side="left", padx=(0, 9))
+        ttk.Label(bar_row, textvariable=self.header_progress_text,
+                  font=("Segoe UI", 17, "bold"), width=6).pack(side="left")
+        ttk.Label(center, textvariable=self.header_eta,
+                  font=("Segoe UI", 12, "bold")).pack(anchor="center", pady=(1, 0))
         ttk.Label(header, text='МГ «Ночная Стража»',
-                  font=("Segoe UI", 11, "bold")).pack(side="right")
+                  font=("Segoe UI", 11, "bold")).grid(row=0, column=2, sticky="e")
 
         settings = ttk.LabelFrame(main, text="Параметры поиска", padding=7)
         settings.pack(fill="x")
@@ -413,6 +433,9 @@ class App:
         self.live_calls = 0
         self.calls_planned = planned_calls
         self.action = "Подключение к AliExpress…"
+        self.header_progress_value.set(0)
+        self.header_progress_text.set("0%")
+        self.header_eta.set("Осталось: рассчитываю…")
         self.search_btn.configure(state="disabled")
         self.recheck_btn.configure(state="disabled")
         self.stop_btn.configure(state="normal")
@@ -551,9 +574,15 @@ class App:
             pause_msg = f" | {self.pause_reason}: ещё {self._format_duration(left)}"
         else:
             pause_msg = ""
+        # План уточняется после поиска карточек, поэтому процент приблизительный.
+        percentage = min(99, int(100 * self.calls_done / self.calls_planned)) if self.calls_planned > 0 else 0
+        self.header_progress_value.set(percentage)
+        self.header_progress_text.set(f"≈{percentage}%")
         if self.stop_event.is_set():
+            self.header_eta.set("Останавливаю…")
             self.progress.set(f"Останавливаю… Обработано вызовов/кэша {self.calls_done}, новых запросов {self.live_calls}.")
         else:
+            self.header_eta.set(f"Осталось: ≈ {self._format_duration(estimate)}")
             self.progress.set(f"{self.action} | Шагов ~{self.calls_done}/{self.calls_planned}; "
                               f"новых запросов {self.live_calls}; осталось ≈ {self._format_duration(estimate)}"
                               f"{pause_msg}")
@@ -585,10 +614,14 @@ class App:
                     self._set_idle()
                     visible = self._visible_indices()
                     if cancelled:
+                        self.header_eta.set("Поиск остановлен")
                         self.progress.set(f"Остановлено пользователем: обработано {len(self.results)} вариантов, "
                                           f"показано {len(visible)}, новых запросов {live_calls}, из кэша {cache_hits}.")
                         self._write_log("ПОИСК ОСТАНОВЛЕН ПОЛЬЗОВАТЕЛЕМ. Частичные результаты доступны в таблице и экспорте.")
                     else:
+                        self.header_progress_value.set(100)
+                        self.header_progress_text.set("100%")
+                        self.header_eta.set("Поиск завершён")
                         self.progress.set(f"Готово: найдено {len(self.results)}, показано {len(visible)}; "
                                           f"новых запросов {live_calls}, из кэша {cache_hits}.")
                         self._write_log("Поиск завершён. Результаты доступны в таблице.")
@@ -597,12 +630,17 @@ class App:
                     self.results[index] = row
                     self._redraw(select_index=index)
                     self._set_idle()
+                    self.header_progress_value.set(100)
+                    self.header_progress_text.set("100%")
+                    self.header_eta.set("Проверка SKU завершена")
                     self.progress.set("Повторная оценка SKU получена; стоимость города — не итог корзины")
                 elif typ == "stopped":
                     self._set_idle()
+                    self.header_eta.set("Остановлено")
                     self.progress.set("Операция остановлена пользователем; текущие предложения сохранены")
                 elif typ == "fail":
                     self._set_idle()
+                    self.header_eta.set("Ошибка поиска")
                     self._write_log("ОШИБКА: " + data)
                     if not self._close_requested:
                         messagebox.showerror("Ошибка обращения к AliExpress", data +

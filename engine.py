@@ -6,6 +6,28 @@ import re
 from dataclasses import dataclass, asdict
 from timefmt import local_now, local_datetime
 from typing import Any
+from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
+
+def product_url_for_sku(url: str, sku_id: str) -> str:
+    """Ссылка на конкретный SKU: остальные параметры и якорь сохраняются.
+
+    Неизвестный/ненумерический SKU или неподходящий адрес не меняем.
+    """
+    sku = str(sku_id or "").strip()
+    if not sku.isascii() or not sku.isdigit():
+        return url
+    try:
+        parts = urlsplit(url)
+    except ValueError:
+        return url
+    if (parts.scheme.lower() != "https" or parts.netloc.lower() != "aliexpress.ru"
+            or not re.fullmatch(r"/item/\d+\.html/?", parts.path)):
+        return url
+    params = [(k, v) for k, v in parse_qsl(parts.query, keep_blank_values=True)
+              if k.lower() != "sku_id"]
+    params.append(("sku_id", sku))
+    return urlunsplit(parts._replace(query=urlencode(params)))
+
 
 # Только явные обозначения количества, чтобы не принять «20 мм» за 20 штук.
 _COUNT_RE = re.compile(
@@ -179,7 +201,8 @@ def offer_from_product(product: dict, selected: dict, target: int, quote: dict |
     else:
         total, per_piece = None, None
     return Offer(item_id=str(product.get("item_id") or ""), source_id=int(product.get("source_id") or 0),
-                 sku_id=sku_id, name=str(product.get("name") or ""), url=str(product.get("url") or ""),
+                 sku_id=sku_id, name=str(product.get("name") or ""),
+                 url=product_url_for_sku(str(product.get("url") or ""), sku_id),
                  options="; ".join(f"{k}: {v}" for k, v in (variant.get("options") or {}).items()) if isinstance(variant.get("options"), dict) else str(variant.get("options") or ""),
                  pack_size=pack, pack_basis=selected["basis"], needed_lots=lots, actual_pieces=pieces,
                  unit_price=price, goods_total=goods, delivery=shipping, total=total,

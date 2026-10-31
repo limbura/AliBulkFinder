@@ -22,13 +22,15 @@ class Session:
         return SimpleNamespace(isError=False, structuredContent={"items": [], "has_more": False})
 
 
-def test_fresh_install_defaults(self):
-    self.assertEqual(DEFAULTS["target"], "99")
-    self.assertEqual(DEFAULTS["min_interval_sec"], "3")
-    self.assertEqual(DEFAULTS["budget_pause_minutes"], "0")
-    self.assertEqual(DEFAULTS["throttle_pause_minutes"], "15")
-    with tempfile.TemporaryDirectory() as folder, patch("app.SETTINGS", Path(folder) / "settings.json"):
-        self.assertEqual(read_settings()["budget_pause_minutes"], "0")
+class SettingsTests(unittest.TestCase):
+    def test_fresh_install_defaults(self):
+        self.assertEqual(DEFAULTS["target"], "99")
+        self.assertEqual(DEFAULTS["min_interval_sec"], "3")
+        self.assertEqual(DEFAULTS["budget_pause_minutes"], "0")
+        self.assertEqual(DEFAULTS["throttle_pause_minutes"], "15")
+        with tempfile.TemporaryDirectory() as folder, patch("app.SETTINGS", Path(folder) / "settings.json"):
+            self.assertEqual(read_settings()["target"], "99")
+            self.assertEqual(read_settings()["budget_pause_minutes"], "0")
 
     def test_existing_settings_are_preserved(self):
         with tempfile.TemporaryDirectory() as folder:
