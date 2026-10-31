@@ -19,3 +19,8 @@ alibulkfinder_*.log*
 
 # Временные файлы
 *.tmp
+
+# Результаты сборки приложения
+build/
+dist/
+*.spec
