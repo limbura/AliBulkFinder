@@ -70,6 +70,11 @@ class TestGUI(unittest.TestCase):
 
     def test_header_progress_and_eta(self):
         self.assertIsInstance(self.app.header_progress_bar, ttk.Progressbar)
+        self.assertEqual(
+            str(self.app.header_progress_bar.master),
+            str(self.app.header_eta_label.master),
+            "Полоса и оставшееся время должны находиться в одной горизонтальной панели")
+        self.assertEqual(self.app.header_eta_label.pack_info()["side"], "left")
         self.assertEqual(self.app.header_progress_value.get(), 0)
         self.app.pending_search_params = self.app.params()
         self.app._new_operation(planned_calls=10)

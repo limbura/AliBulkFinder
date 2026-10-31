@@ -50,7 +50,7 @@ def read_settings() -> dict:
 class App:
     def __init__(self, root: tk.Tk):
         self.root = root
-        self.root.title("AliBulkFinder · поиск оптовых предложений AliExpress RU · v0.3.8")
+        self.root.title("AliBulkFinder · поиск оптовых предложений AliExpress RU · v0.3.9")
         self.root.geometry("1300x850")
         self.root.minsize(1000, 650)
         self.messages: queue.Queue = queue.Queue()
@@ -191,18 +191,20 @@ class App:
         self.header_progress_value = tk.DoubleVar(value=0)
         self.header_progress_text = tk.StringVar(value="0%")
         self.header_eta = tk.StringVar(value="Осталось: —")
+        # Всё в одной горизонтальной строке: полоса + проценты + оставшееся время.
         bar_row = ttk.Frame(center)
         bar_row.pack(anchor="center")
         style.configure("Header.Horizontal.TProgressbar", thickness=18)
         self.header_progress_bar = ttk.Progressbar(
             bar_row, style="Header.Horizontal.TProgressbar", orient="horizontal",
-            mode="determinate", maximum=100, length=240,
+            mode="determinate", maximum=100, length=200,
             variable=self.header_progress_value)
-        self.header_progress_bar.pack(side="left", padx=(0, 9))
+        self.header_progress_bar.pack(side="left", padx=(0, 8))
         ttk.Label(bar_row, textvariable=self.header_progress_text,
-                  font=("Segoe UI", 17, "bold"), width=6).pack(side="left")
-        ttk.Label(center, textvariable=self.header_eta,
-                  font=("Segoe UI", 12, "bold")).pack(anchor="center", pady=(1, 0))
+                  font=("Segoe UI", 15, "bold"), width=6).pack(side="left")
+        self.header_eta_label = ttk.Label(
+            bar_row, textvariable=self.header_eta, font=("Segoe UI", 12, "bold"))
+        self.header_eta_label.pack(side="left", padx=(10, 0))
         ttk.Label(header, text='МГ «Ночная Стража»',
                   font=("Segoe UI", 11, "bold")).grid(row=0, column=2, sticky="e")
 
