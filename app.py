@@ -73,7 +73,7 @@ class App:
         self._last_redraw = 0.0
         self._redraw_pending = False
         self.used_city = ""
-        self.current_target = 200
+        self.current_target = 99
         self.current_overbuy = 0
         self.used_filter = TitleFilter(mode="off")
         self.inputs = read_settings()
