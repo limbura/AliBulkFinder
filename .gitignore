@@ -24,3 +24,9 @@ alibulkfinder_*.log*
 build/
 dist/
 *.spec
+# Локальные portable-браузеры и сборка
+browsers/
+builds/
+dist/
+build/
+*.spec

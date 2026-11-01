@@ -11,7 +11,8 @@ import time
 from datetime import datetime
 from pathlib import Path
 
-BASE = Path(__file__).resolve().parent
+from portable import app_folder
+BASE = app_folder()
 CACHE_DIR = BASE / "cache"
 CACHE_TTL = {"search_products": 6 * 3600, "get_product": 45 * 60}
 

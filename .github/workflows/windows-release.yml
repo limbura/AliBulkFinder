@@ -1,0 +1,39 @@
+name: Windows portable release
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          architecture: x64
+      - name: Install build dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt
+          python -m pip install "pyinstaller>=6.14,<7"
+      - name: Run Python tests
+        run: python -m unittest discover -s tests -v
+      - name: Build portable distribution and smoke test EXE
+        run: python build_release.py
+      - uses: actions/upload-artifact@v4
+        with:
+          name: AliBulkFinder-windows-x64
+          path: builds/AliBulkFinder_v0.4.0_windows_x64.zip
+          if-no-files-found: error
+      - name: Publish tagged release
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "${{ github.ref_name }}" "builds/AliBulkFinder_v0.4.0_windows_x64.zip" --generate-notes

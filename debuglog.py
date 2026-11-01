@@ -8,7 +8,8 @@ import threading
 
 from log_rotation import MAX_LOG_BYTES, BACKUP_COUNT, create_rotating_logger
 
-LOG_PATH = Path(__file__).resolve().parent / "alibulkfinder_debug.log"
+from portable import app_folder
+LOG_PATH = app_folder() / "alibulkfinder_debug.log"
 
 # Одна файловая запись может поступить из разных фоновых потоков интерфейса.
 _config_lock = threading.RLock()

@@ -25,7 +25,8 @@ from filters import TitleFilter, PriceRange
 from debuglog import LOG_PATH, record
 from timefmt import local_now
 
-BASE = Path(__file__).resolve().parent
+from portable import app_folder
+BASE = app_folder()
 SETTINGS = BASE / "settings.json"
 DEFAULTS = {
     "queries": "рулетка ретрактор для бейджа\nретрактор для бейджа 100 шт\nbadge reel retractable holder\nбейдж катушка 50 шт",
@@ -50,7 +51,7 @@ def read_settings() -> dict:
 class App:
     def __init__(self, root: tk.Tk):
         self.root = root
-        self.root.title("AliBulkFinder · поиск оптовых предложений AliExpress RU · v0.3.9")
+        self.root.title("AliBulkFinder · поиск оптовых предложений AliExpress RU · v0.4.0")
         self.root.geometry("1300x850")
         self.root.minsize(1000, 650)
         self.messages: queue.Queue = queue.Queue()

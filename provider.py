@@ -110,7 +110,8 @@ class LiveProvider:
             env["AE_CITY"] = self.city
             env["AE_MIN_INTERVAL"] = str(max(self.min_interval, float(env.get("AE_MIN_INTERVAL", "1.0"))))
             params = StdioServerParameters(command=sys.executable,
-                                          args=["-m", "aliexpress_ru_mcp.server"], env=env)
+                                          args=(["--mcp-server"] if getattr(sys, "frozen", False) else
+                                                ["-m", "aliexpress_ru_mcp.server"]), env=env)
             read_stream, write_stream = await self.stack.enter_async_context(stdio_client(params))
             self.session = await self.stack.enter_async_context(ClientSession(read_stream, write_stream))
             await self.session.initialize()

@@ -14,7 +14,8 @@ import sys
 
 from log_rotation import MAX_LOG_BYTES, BACKUP_COUNT, close_logger, create_rotating_logger
 
-ROOT = Path(__file__).resolve().parent
+from portable import app_folder, is_frozen
+ROOT = app_folder()
 CONSOLE_LOG_PATH = ROOT / "alibulkfinder_console.log"
 # Даже слишком длинные строки делятся на записи, не превышающие 16 КиБ.
 LINE_PART_LIMIT = 16 * 1024
@@ -41,7 +42,8 @@ def main() -> int:
         env["PYTHONUNBUFFERED"] = "1"
         env["PYTHONIOENCODING"] = "utf-8:replace"
         child = subprocess.Popen(
-            [sys.executable, "-u", str(ROOT / "app.py")],
+            ([sys.executable, "--gui"] if is_frozen() else
+             [sys.executable, "-u", str(ROOT / "app.py")]),
             cwd=ROOT, env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
             bufsize=0,
         )
