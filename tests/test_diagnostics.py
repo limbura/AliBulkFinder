@@ -14,7 +14,7 @@ class SessionStub:
 
 class DiagnosticsTests(unittest.TestCase):
     def test_invalid_mcp_text_is_explained(self):
-        with tempfile.TemporaryDirectory() as temp, patch('debuglog.LOG_PATH', Path(temp)/'debug.log'):
+        with tempfile.TemporaryDirectory() as temp, patch('provider.record'):
             p = LiveProvider("Санкт-Петербург", guard=RequestGuard(Path(temp)))
             p.session = SessionStub(SimpleNamespace(isError=False, structuredContent=None, content=[SimpleNamespace(text="<html>Access Denied</html>")]))
             with self.assertRaisesRegex(RuntimeError, r"не является JSON.*<html>"):
@@ -25,7 +25,7 @@ class DiagnosticsTests(unittest.TestCase):
             p.session = SessionStub(SimpleNamespace(isError=False, structuredContent=None, content=[SimpleNamespace(text='{"items":[]}')]))
             self.assertEqual(asyncio.run(p.search('ретрактор')), {"items": []})
     def test_error_flag_remains_readable(self):
-        with tempfile.TemporaryDirectory() as temp, patch('debuglog.LOG_PATH', Path(temp)/'debug.log'):
+        with tempfile.TemporaryDirectory() as temp, patch('provider.record'):
             p = LiveProvider("Санкт-Петербург", guard=RequestGuard(Path(temp)))
             p.session = SessionStub(SimpleNamespace(isError=True, structuredContent=None, content=[SimpleNamespace(text='aliexpress.ru answered HTTP 403')]))
             with self.assertRaisesRegex(RuntimeError, 'HTTP 403'):
