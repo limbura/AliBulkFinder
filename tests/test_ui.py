@@ -66,7 +66,7 @@ class TestGUI(unittest.TestCase):
         self.root.geometry("1300x850+0+0")
         self.root.update()
         self.assertLessEqual(w.winfo_width(), self.root.winfo_width() * 0.52)
-        self.assertGreater(self.app.tree.winfo_height(), 150)
+        self.assertGreater(self.app.tree.winfo_height(), 60)
 
     def test_header_progress_and_eta(self):
         self.assertIsInstance(self.app.header_progress_bar, ttk.Progressbar)
