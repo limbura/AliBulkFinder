@@ -54,7 +54,7 @@ def main() -> None:
         for file in sorted(folder.rglob("*")):
             if file.is_file():
                 z.write(file, Path("AliBulkFinder") / file.relative_to(folder))
-    print(f"Создано: {archive} ({archive.stat().st_size / 1024**2:.1f} MiB)")
+    print(f"Created: {archive} ({archive.stat().st_size / 1024**2:.1f} MiB)")
 
 
 if __name__ == "__main__":
