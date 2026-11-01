@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import os
+import asyncio
 import shutil
 import subprocess
 import sys
@@ -25,7 +26,7 @@ def main() -> None:
     out.mkdir(exist_ok=True)
     run("-m", "PyInstaller", "--noconfirm", "--clean", "--onedir", "--windowed",
         "--name", "AliBulkFinder", "--collect-all", "playwright",
-        "--collect-all", "aliexpress_ru_mcp", "--collect-all", "mcp",
+        "--collect-all", "aliexpress_ru_mcp",
         "--distpath", str(ROOT / "dist"), "--workpath", str(ROOT / "build"),
         "--specpath", str(ROOT), "launcher.py")
     folder = ROOT / "dist" / "AliBulkFinder"
@@ -34,6 +35,19 @@ def main() -> None:
         raise RuntimeError("PyInstaller не создал AliBulkFinder.exe")
     # Smoke test the frozen Python dependencies and Playwright's Node driver.
     subprocess.run([str(exe), "--self-test"], cwd=folder, check=True, timeout=90)
+    # Check the actual MCP JSON-RPC stdio handshake of the frozen GUI-subprocess.
+    async def smoke_mcp():
+        from mcp import ClientSession, StdioServerParameters
+        from mcp.client.stdio import stdio_client
+        params = StdioServerParameters(command=str(exe), args=["--mcp-server"])
+        async with stdio_client(params) as (read, write):
+            async with ClientSession(read, write) as session:
+                await asyncio.wait_for(session.initialize(), timeout=40)
+                tools = await asyncio.wait_for(session.list_tools(), timeout=40)
+                names = {tool.name for tool in tools.tools}
+                if "search_products" not in names or "get_product" not in names:
+                    raise RuntimeError("MCP-сервер не предоставил инструменты поиска товаров")
+    asyncio.run(asyncio.wait_for(smoke_mcp(), timeout=60))
     shutil.copy2(ROOT / "README.md", folder / "README.md")
     archive = out / f"{NAME}.zip"
     with zipfile.ZipFile(archive, "w", compression=zipfile.ZIP_DEFLATED, compresslevel=6) as z:
