@@ -18,9 +18,9 @@ class PortableTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp, patch.object(sys, "frozen", True, create=True), \
              patch.object(sys, "executable", str(Path(tmp) / "AliBulkFinder.exe")), \
              patch.dict(os.environ, {}, clear=True):
-            self.assertEqual(portable.app_folder(), Path(tmp))
+            self.assertEqual(portable.app_folder(), Path(tmp).resolve())
             portable.configure_browser()
-            self.assertEqual(os.environ["PLAYWRIGHT_BROWSERS_PATH"], str(Path(tmp) / "browsers"))
+            self.assertEqual(os.environ["PLAYWRIGHT_BROWSERS_PATH"], str(Path(tmp).resolve() / "browsers"))
 
     def test_no_download_for_source_run(self):
         with patch("portable._install_dialog") as dialog:
